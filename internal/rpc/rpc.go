@@ -30,3 +30,9 @@ type AppendEntriesArgs struct {
 	Entries      []LogEntry // Save කරන්න ඕන log entries (Heartbeat එකක් නම් මේක හිස්)
 	LeaderCommit int        // Leader commit කරපු අන්තිම index එක
 }
+
+// AppendEntriesReply කියන්නේ Follower විසින් Leader ට දෙන උත්තරය
+type AppendEntriesReply struct {
+	Term    int  // Follower ගේ වත්මන් term එක
+	Success bool // Leader ගේ log එක follower ගේ log එක එක්ක match වුණා නම් true
+}
