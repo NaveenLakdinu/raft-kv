@@ -13,3 +13,10 @@ type RequestVoteReply struct {
 	Term        int  // උත්තරය දෙන node එකේ term එක
 	VoteGranted bool // ඡන්දය දුන්නද නැද්ද (true / false)
 }
+
+// LogEntry කියන්නේ Raft log එකේ තැන්පත් වෙන එක record එකක්
+type LogEntry struct {
+	Index   int         // Log එකේ පිහිටීම (1, 2, 3...)
+	Term    int         // මේ entry එක ආපු වෙලාවේ තිබ්බ Term එක
+	Command interface{} // Save කරන්න ආපු සත්‍ය data එක (උදා: "SET x=10")
+}
