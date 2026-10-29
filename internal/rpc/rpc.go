@@ -20,3 +20,13 @@ type LogEntry struct {
 	Term    int         // මේ entry එක ආපු වෙලාවේ තිබ්බ Term එක
 	Command interface{} // Save කරන්න ආපු සත්‍ය data එක (උදා: "SET x=10")
 }
+
+// AppendEntriesArgs කියන්නේ Leader විසින් අනිත් nodes වලට යවන විස්තර
+type AppendEntriesArgs struct {
+	Term         int        // Leader ගේ වත්මන් term එක
+	LeaderId     int        // Leader ගේ ID එක (Followers ලාට දැනගන්න)
+	PrevLogIndex int        // අලුත් entries වලට කලින් තියෙන log index එක
+	PrevLogTerm  int        // PrevLogIndex එකේ තිබ්බ term එක
+	Entries      []LogEntry // Save කරන්න ඕන log entries (Heartbeat එකක් නම් මේක හිස්)
+	LeaderCommit int        // Leader commit කරපු අන්තිම index එක
+}
