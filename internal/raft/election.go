@@ -9,11 +9,11 @@ import (
 	raftrpc "raft-kv/internal/rpc"
 )
 
-// runElectionTimer runs in the background and starts an election if no heartbeat is received
+// runElectionTimer monitors heartbeats and triggers an election when timeout occurs
 func (rf *Raft) runElectionTimer() {
-	for {
-		timeout := getRandomElectionTimeout()
-		time.Sleep(timeout)
+	for !rf.killed() {
+		// Sleep for a short polling interval
+		time.Sleep(20 * time.Millisecond)
 
 		rf.mu.Lock()
 		if rf.role == Leader {
@@ -21,7 +21,9 @@ func (rf *Raft) runElectionTimer() {
 			continue
 		}
 
-		if time.Since(rf.lastHeartbeat) >= timeout {
+		// Check if election timeout has elapsed
+		timeout := getRandomElectionTimeout()
+		if time.Since(rf.lastHeartbeat) > timeout {
 			fmt.Printf("[Node %d] Election timeout elapsed! Transitioning to Candidate...\n", rf.me)
 			rf.startElection()
 		}
@@ -50,7 +52,7 @@ func (rf *Raft) startElection() {
 // broadcastRequestVote sends RequestVote RPCs concurrently to all peers
 func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) {
 	var voteMutex sync.Mutex
-	votesReceived := 1 // Vote for self
+	votesReceived := 1 // Self vote
 	majority := (peersCount / 2) + 1
 
 	for peerIndex, peerAddr := range rf.peers {
@@ -61,7 +63,7 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 		go func(addr string) {
 			client, err := rpc.Dial("tcp", addr)
 			if err != nil {
-				return // Peer might be unreachable
+				return // Peer is unreachable/killed
 			}
 			defer client.Close()
 
@@ -79,7 +81,6 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 
-			// If peer has higher term, step down to Follower
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.role = Follower
@@ -87,7 +88,6 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 				return
 			}
 
-			// If vote granted and still candidate in this term
 			if reply.VoteGranted && rf.role == Candidate && rf.currentTerm == term {
 				voteMutex.Lock()
 				votesReceived++
@@ -96,7 +96,7 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 				if votesReceived >= majority && rf.role != Leader {
 					rf.role = Leader
 					fmt.Printf(">>> [Node %d] ELECTED AS LEADER for Term %d! <<<\n", rf.me, rf.currentTerm)
-					go rf.runHeartbeatTicker() // Start sending periodic heartbeats
+					go rf.runHeartbeatTicker()
 				}
 				voteMutex.Unlock()
 			}

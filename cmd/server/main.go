@@ -20,12 +20,13 @@ type ServerInstance struct {
 	isDead   bool
 }
 
-// Kill stops the RPC listener, simulating a node crash
+// Kill stops the RPC listener and marks raft node as dead
 func (s *ServerInstance) Kill() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.isDead {
 		s.isDead = true
+		s.raftNode.Kill() // Terminate Raft goroutines
 		if s.listener != nil {
 			s.listener.Close()
 		}
@@ -61,7 +62,7 @@ func startNode(nodeId int, peerAddresses []string) *ServerInstance {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
-				return // Terminated gracefully on Kill()
+				return
 			}
 			go rpcServer.ServeConn(conn)
 		}
@@ -101,12 +102,11 @@ func main() {
 
 	if leaderInstance != nil {
 		fmt.Printf("\n⚡ Current Active Leader is Node %d. Simulating unexpected failure...\n", leaderInstance.nodeId)
-		// Kill the leader node
 		leaderInstance.Kill()
 	}
 
-	// 3. Wait 2 seconds to observe re-election among the remaining alive nodes
-	time.Sleep(2000 * time.Millisecond)
+	// 3. Wait 3.5 seconds to observe re-election among the remaining alive nodes
+	time.Sleep(3500 * time.Millisecond)
 
 	fmt.Println("\n==================================================")
 	fmt.Println("🏁 Failover test completed.")

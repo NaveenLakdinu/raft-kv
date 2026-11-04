@@ -10,13 +10,13 @@ import (
 
 // runHeartbeatTicker sends periodic heartbeats to all peers while node is Leader
 func (rf *Raft) runHeartbeatTicker() {
-	for {
+	for !rf.killed() {
 		time.Sleep(50 * time.Millisecond)
 
 		rf.mu.Lock()
 		if rf.role != Leader {
 			rf.mu.Unlock()
-			return // Exit goroutine if no longer leader
+			return
 		}
 
 		currentTerm := rf.currentTerm
@@ -37,14 +37,14 @@ func (rf *Raft) broadcastHeartbeat(term int, leaderId int) {
 		go func(addr string) {
 			client, err := rpc.Dial("tcp", addr)
 			if err != nil {
-				return
+				return // Peer is down or unreachable
 			}
 			defer client.Close()
 
 			args := raftrpc.AppendEntriesArgs{
 				Term:     term,
 				LeaderId: leaderId,
-				Entries:  nil, // Empty entries slice signifies heartbeat
+				Entries:  nil,
 			}
 			var reply raftrpc.AppendEntriesReply
 
@@ -55,7 +55,7 @@ func (rf *Raft) broadcastHeartbeat(term int, leaderId int) {
 
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
-			// If a follower has higher term, step down
+
 			if reply.Term > rf.currentTerm {
 				fmt.Printf("[Node %d] Discovered higher term %d from peer. Stepping down to Follower.\n", rf.me, reply.Term)
 				rf.currentTerm = reply.Term
