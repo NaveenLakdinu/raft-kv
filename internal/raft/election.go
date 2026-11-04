@@ -93,3 +93,14 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 				voteMutex.Lock()
 				votesReceived++
 				fmt.Printf("[Node %d] Received vote! Total votes: %d/%d\n", rf.me, votesReceived, majority)
+
+				// Won majority votes -> Become Leader!
+				if votesReceived >= majority && rf.role != Leader {
+					rf.role = Leader
+					fmt.Printf(">>> [Node %d] ELECTED AS LEADER for Term %d! <<<\n", rf.me, rf.currentTerm)
+				}
+				voteMutex.Unlock()
+			}
+		}(peerAddr)
+	}
+}
