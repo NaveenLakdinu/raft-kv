@@ -60,4 +60,22 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 		}
 
 		go func(addr string) {
-			
+			client, err := rpc.Dial("tcp", addr)
+			if err != nil {
+				return // Peer might be down or unreachable
+			}
+			defer client.Close()
+
+			args := raftrpc.RequestVoteArgs{
+				Term:        term,
+				CandidateId: candidateId,
+			}
+			var reply raftrpc.RequestVoteReply
+
+			err = client.Call("Raft.RequestVote", &args, &reply)
+			if err != nil {
+				return
+			}
+
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
