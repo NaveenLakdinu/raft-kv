@@ -26,3 +26,32 @@ func (rf *Raft) runHeartbeatTicker() {
 		rf.broadcastHeartbeat(currentTerm, leaderId)
 	}
 }
+
+// broadcastHeartbeat sends AppendEntries RPC (heartbeat) to all peers concurrently
+func (rf *Raft) broadcastHeartbeat(term int, leaderId int) {
+	for peerIndex, peerAddr := range rf.peers {
+		if peerIndex == leaderId {
+			continue // Skip self
+		}
+
+		go func(addr string) {
+			client, err := rpc.Dial("tcp", addr)
+			if err != nil {
+				return
+			}
+			defer client.Close()
+
+			args := raftrpc.AppendEntriesArgs{
+				Term:     term,
+				LeaderId: leaderId,
+				Entries:  nil, // Empty entries slice signifies heartbeat
+			}
+			var reply raftrpc.AppendEntriesReply
+
+			err = client.Call("Raft.AppendEntries", &args, &reply)
+			if err != nil {
+				return
+			}
+
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
