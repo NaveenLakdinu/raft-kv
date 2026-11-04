@@ -161,3 +161,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if rf.role != Leader || rf.killed() {
 		return -1, rf.currentTerm, false
 	}
+
+	// 1-based indexing for Raft log
+	newIndex := len(rf.log) + 1
+	newTerm := rf.currentTerm
+
+	entry := rpc.LogEntry{
+		Index:   newIndex,
+		Term:    newTerm,
+		Command: command,
+	}
+
+	rf.log = append(rf.log, entry)
+	fmt.Printf("[Leader %d] Appended new log entry at Index %d (Term %d): %v\n", rf.me, newIndex, newTerm, command)
+
+	return newIndex, newTerm, true
+}
