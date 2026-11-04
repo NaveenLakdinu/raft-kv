@@ -36,3 +36,4 @@ type AppendEntriesReply struct {
 	Term    int  // Follower ගේ වත්මන් term එක
 	Success bool // Leader ගේ log එක follower ගේ log එක එක්ක match වුණා නම් true
 }
+
