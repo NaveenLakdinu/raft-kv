@@ -87,3 +87,9 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 				rf.votedFor = -1
 				return
 			}
+
+			// If vote granted and we are still running this election
+			if reply.VoteGranted && rf.role == Candidate && rf.currentTerm == term {
+				voteMutex.Lock()
+				votesReceived++
+				fmt.Printf("[Node %d] Received vote! Total votes: %d/%d\n", rf.me, votesReceived, majority)
