@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"math/rand"
 	"sync"
 	"time"
 
@@ -18,38 +19,43 @@ const (
 
 // Raft represents a single Raft consensus node
 type Raft struct {
-	mu        sync.Mutex   // Lock to protect shared access to this peer's state
-	peers     []string     // RPC addresses of all peers in the cluster
-	me        int          // Index of this node into peers[]
-	role      NodeRole     // Current role (Follower, Candidate, or Leader)
+	mu    sync.Mutex // Lock to protect shared access to this peer's state
+	peers []string   // RPC addresses of all peers in the cluster
+	me    int        // Index of this node into peers[]
+	role  NodeRole   // Current role (Follower, Candidate, or Leader)
 
-	// Persistent state on all servers (updated on stable storage before responding to RPCs)
-	currentTerm int          // Latest term server has seen (initialized to 0)
-	votedFor    int          // CandidateId that received vote in current term (-1 if none)
-	log         []rpc.LogEntry // Log entries; each entry contains command for state machine
+	// Persistent state on all servers
+	currentTerm int            // Latest term server has seen
+	votedFor    int            // CandidateId that received vote in current term (-1 if none)
+	log         []rpc.LogEntry // Log entries
 
 	// Volatile state on all servers
 	commitIndex int // Index of highest log entry known to be committed
 	lastApplied int // Index of highest log entry applied to state machine
 
-	// Election and heartbeat control
-	heartbeatInterval time.Duration
-	electionTimeout   time.Duration
+	// Timer management
+	lastHeartbeat  time.Time     // Time when the last heartbeat/RPC was received
+	heartbeatReset chan struct{} // Channel to signal a heartbeat reset
+}
+
+// getRandomElectionTimeout returns a randomized duration between 150ms and 300ms
+func getRandomElectionTimeout() time.Duration {
+	return time.Duration(150+rand.Intn(150)) * time.Millisecond
 }
 
 // NewRaft creates and initializes a new Raft node instance
 func NewRaft(peers []string, me int) *Raft {
 	rf := &Raft{
-		peers:             peers,
-		me:                me,
-		role:              Follower,
-		currentTerm:       0,
-		votedFor:          -1,
-		log:               make([]rpc.LogEntry, 0),
-		commitIndex:       0,
-		lastApplied:       0,
-		heartbeatInterval: 50 * time.Millisecond,
-		electionTimeout:   150 * time.Millisecond,
+		peers:          peers,
+		me:             me,
+		role:           Follower,
+		currentTerm:    0,
+		votedFor:       -1,
+		log:            make([]rpc.LogEntry, 0),
+		commitIndex:    0,
+		lastApplied:    0,
+		lastHeartbeat:  time.Now(),
+		heartbeatReset: make(chan struct{}, 1),
 	}
 
 	return rf
