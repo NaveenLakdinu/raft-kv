@@ -96,6 +96,7 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 				if votesReceived >= majority && rf.role != Leader {
 					rf.role = Leader
 					fmt.Printf(">>> [Node %d] ELECTED AS LEADER for Term %d! <<<\n", rf.me, rf.currentTerm)
+					go rf.runHeartbeatTicker() // Start sending periodic heartbeats
 				}
 				voteMutex.Unlock()
 			}
