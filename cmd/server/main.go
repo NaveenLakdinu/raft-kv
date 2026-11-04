@@ -41,3 +41,15 @@ func startNode(nodeId int, peerAddresses []string) {
 		go rpcServer.ServeConn(conn)
 	}
 }
+
+func main() {
+	// Cluster configuration with 3 local nodes
+	peers := []string{
+		"127.0.0.1:8001", // Node 0
+		"127.0.0.1:8002", // Node 1
+		"127.0.0.1:8003", // Node 2
+	}
+
+	fmt.Println("==================================================")
+	fmt.Println("🚀 Starting 3-Node Raft Cluster on Localhost")
+	fmt.Println("==================================================")
