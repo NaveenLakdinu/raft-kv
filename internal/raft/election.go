@@ -79,3 +79,11 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
+
+			// Check if reply has a higher term (we are obsolete)
+			if reply.Term > rf.currentTerm {
+				rf.currentTerm = reply.Term
+				rf.role = Follower
+				rf.votedFor = -1
+				return
+			}
