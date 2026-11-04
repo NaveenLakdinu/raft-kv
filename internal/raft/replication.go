@@ -55,3 +55,13 @@ func (rf *Raft) broadcastHeartbeat(term int, leaderId int) {
 
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
+			// If a follower has higher term, step down
+			if reply.Term > rf.currentTerm {
+				fmt.Printf("[Node %d] Discovered higher term %d from peer. Stepping down to Follower.\n", rf.me, reply.Term)
+				rf.currentTerm = reply.Term
+				rf.role = Follower
+				rf.votedFor = -1
+			}
+		}(peerAddr)
+	}
+}
