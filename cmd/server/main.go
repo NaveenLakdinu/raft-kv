@@ -53,3 +53,9 @@ func main() {
 	fmt.Println("==================================================")
 	fmt.Println("🚀 Starting 3-Node Raft Cluster on Localhost")
 	fmt.Println("==================================================")
+
+	// Start Node 0, Node 1, and Node 2 concurrently
+	for i := 0; i < len(peers); i++ {
+		nodeId := i
+		go startNode(nodeId, peers)
+	}
