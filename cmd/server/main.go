@@ -59,3 +59,10 @@ func main() {
 		nodeId := i
 		go startNode(nodeId, peers)
 	}
+
+	// Keep main function alive to observe election and heartbeats
+	time.Sleep(3 * time.Second)
+	fmt.Println("==================================================")
+	fmt.Println("🏁 Test run finished successfully.")
+	fmt.Println("==================================================")
+}
