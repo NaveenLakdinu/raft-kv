@@ -117,3 +117,10 @@ func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntr
 		reply.Success = false
 		return nil
 	}
+
+	// Rule 2: If term is higher, update term and step down to Follower
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.role = Follower
+		rf.votedFor = -1
+	}
