@@ -41,3 +41,9 @@ func (rf *Raft) startElection() {
 	peersCount := len(rf.peers)
 
 	fmt.Printf("[Node %d] Started election for Term %d\n", rf.me, rf.currentTerm)
+
+	// Release lock while sending RPCs across the network
+	rf.mu.Unlock()
+	go rf.broadcastRequestVote(currentTerm, candidateId, peersCount)
+	rf.mu.Lock()
+}
