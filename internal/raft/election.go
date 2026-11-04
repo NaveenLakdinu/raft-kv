@@ -12,7 +12,6 @@ import (
 // runElectionTimer monitors heartbeats and triggers an election when timeout occurs
 func (rf *Raft) runElectionTimer() {
 	for !rf.killed() {
-		// Sleep for a short polling interval
 		time.Sleep(20 * time.Millisecond)
 
 		rf.mu.Lock()
@@ -21,7 +20,6 @@ func (rf *Raft) runElectionTimer() {
 			continue
 		}
 
-		// Check if election timeout has elapsed
 		timeout := getRandomElectionTimeout()
 		if time.Since(rf.lastHeartbeat) > timeout {
 			fmt.Printf("[Node %d] Election timeout elapsed! Transitioning to Candidate...\n", rf.me)
@@ -63,7 +61,7 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 		go func(addr string) {
 			client, err := rpc.Dial("tcp", addr)
 			if err != nil {
-				return // Peer is unreachable/killed
+				return
 			}
 			defer client.Close()
 
@@ -96,6 +94,13 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 				if votesReceived >= majority && rf.role != Leader {
 					rf.role = Leader
 					fmt.Printf(">>> [Node %d] ELECTED AS LEADER for Term %d! <<<\n", rf.me, rf.currentTerm)
+
+					// Initialize nextIndex and matchIndex for all peers
+					for i := range rf.peers {
+						rf.nextIndex[i] = len(rf.log) + 1
+						rf.matchIndex[i] = 0
+					}
+
 					go rf.runHeartbeatTicker()
 				}
 				voteMutex.Unlock()

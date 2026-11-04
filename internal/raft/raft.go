@@ -36,6 +36,10 @@ type Raft struct {
 	commitIndex int // Index of highest log entry known to be committed
 	lastApplied int // Index of highest log entry applied to state machine
 
+	// Volatile state on leaders (Reinitialized after election)
+	nextIndex  []int // For each server, index of next log entry to send
+	matchIndex []int // For each server, index of highest log entry known to be replicated
+
 	// Timer management
 	lastHeartbeat time.Time // Time when the last valid RPC was received
 }
@@ -66,6 +70,8 @@ func NewRaft(peers []string, me int) *Raft {
 		log:           make([]rpc.LogEntry, 0),
 		commitIndex:   0,
 		lastApplied:   0,
+		nextIndex:     make([]int, len(peers)),
+		matchIndex:    make([]int, len(peers)),
 		lastHeartbeat: time.Now(),
 	}
 
@@ -83,86 +89,15 @@ func (rf *Raft) GetState() (int, bool) {
 	return rf.currentTerm, rf.role == Leader
 }
 
-// RequestVote RPC handler invoked by a Candidate to gather votes
-func (rf *Raft) RequestVote(args *rpc.RequestVoteArgs, reply *rpc.RequestVoteReply) error {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	if rf.killed() {
-		return fmt.Errorf("node %d is dead", rf.me)
-	}
-
-	// Rule 1: If caller's term is smaller, reject vote
-	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
-		reply.VoteGranted = false
-		return nil
-	}
-
-	// Rule 2: If caller's term is higher, update currentTerm and step down to Follower
-	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-		rf.role = Follower
-		rf.votedFor = -1
-	}
-
-	// Rule 3: Grant vote if we haven't voted for anyone yet in this term
-	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-		rf.votedFor = args.CandidateId
-		rf.lastHeartbeat = time.Now() // Reset election timer when granting vote
-		reply.VoteGranted = true
-		fmt.Printf("[Node %d] Granted vote to Node %d for Term %d\n", rf.me, args.CandidateId, rf.currentTerm)
-	} else {
-		reply.VoteGranted = false
-	}
-
-	reply.Term = rf.currentTerm
-	return nil
-}
-
-// AppendEntries RPC handler invoked by Leader for replication and heartbeats
-func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntriesReply) error {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	if rf.killed() {
-		return fmt.Errorf("node %d is dead", rf.me)
-	}
-
-	// Rule 1: Reply false if term < currentTerm
-	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
-		reply.Success = false
-		return nil
-	}
-
-	// Rule 2: If term is higher, update term and step down to Follower
-	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-		rf.role = Follower
-		rf.votedFor = -1
-	}
-
-	// Valid heartbeat received, reset election timeout
-	rf.lastHeartbeat = time.Now()
-	reply.Term = rf.currentTerm
-	reply.Success = true
-
-	return nil
-}
-
-// Start proposes a command to the Raft cluster (used by clients/KV store)
-// Returns index, currentTerm, and true if this node is the leader
+// Start proposes a command to the Raft cluster
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	// If not the leader, reject the proposal
 	if rf.role != Leader || rf.killed() {
 		return -1, rf.currentTerm, false
 	}
 
-	// 1-based indexing for Raft log
 	newIndex := len(rf.log) + 1
 	newTerm := rf.currentTerm
 
@@ -173,7 +108,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	rf.log = append(rf.log, entry)
-	fmt.Printf("[Leader %d] Appended new log entry at Index %d (Term %d): %v\n", rf.me, newIndex, newTerm, command)
+	rf.matchIndex[rf.me] = newIndex
+	rf.nextIndex[rf.me] = newIndex + 1
+
+	fmt.Printf("[Leader %d] Appended entry at Index %d: %v\n", rf.me, newIndex, command)
 
 	return newIndex, newTerm, true
 }
