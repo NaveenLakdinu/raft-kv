@@ -72,3 +72,10 @@ func (rf *Raft) GetState() (int, bool) {
 
 	return rf.currentTerm, rf.role == Leader
 }
+
+// RequestVote RPC handler invoked by a Candidate to gather votes
+func (rf *Raft) RequestVote(args *rpc.RequestVoteArgs, reply *rpc.RequestVoteReply) error {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	
