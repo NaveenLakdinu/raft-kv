@@ -43,6 +43,7 @@ func getRandomElectionTimeout() time.Duration {
 	return time.Duration(150+rand.Intn(150)) * time.Millisecond
 }
 
+
 // NewRaft creates and initializes a new Raft node instance
 func NewRaft(peers []string, me int) *Raft {
 	rf := &Raft{
@@ -57,6 +58,9 @@ func NewRaft(peers []string, me int) *Raft {
 		lastHeartbeat:  time.Now(),
 		heartbeatReset: make(chan struct{}, 1),
 	}
+
+	// Start the background election timer goroutine
+	go rf.runElectionTimer()
 
 	return rf
 }
