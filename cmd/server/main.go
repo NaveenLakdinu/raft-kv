@@ -31,3 +31,13 @@ func startNode(nodeId int, peerAddresses []string) {
 	defer listener.Close()
 
 	fmt.Printf("[Cluster] Node %d listening on %s\n", nodeId, port)
+
+	// Accept incoming peer connections
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go rpcServer.ServeConn(conn)
+	}
+}
