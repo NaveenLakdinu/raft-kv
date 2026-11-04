@@ -124,3 +124,11 @@ func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntr
 		rf.role = Follower
 		rf.votedFor = -1
 	}
+
+	// Reset election timeout because valid heartbeat received from current leader
+	rf.lastHeartbeat = time.Now()
+	reply.Term = rf.currentTerm
+	reply.Success = true
+
+	return nil
+}
