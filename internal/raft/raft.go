@@ -122,3 +122,77 @@ func (rf *Raft) GetLogLength() int {
 	defer rf.mu.Unlock()
 	return len(rf.log)
 }
+
+// AppendEntries RPC handler invoked by Leader for log replication and heartbeats
+func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntriesReply) error {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Success = false
+	reply.Term = rf.currentTerm
+
+	if rf.killed() {
+		return fmt.Errorf("node %d is dead", rf.me)
+	}
+
+	// Rule 1: Reply false if term < currentTerm
+	if args.Term < rf.currentTerm {
+		return nil
+	}
+
+	// Rule 2: If term is higher, update term and step down to Follower
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.role = Follower
+		rf.votedFor = -1
+	}
+
+	// Valid message received from legitimate leader, reset election timeout
+	rf.lastHeartbeat = time.Now()
+
+	// Rule 3: Reply false if log doesn't contain an entry at prevLogIndex matching prevLogTerm
+	if args.PrevLogIndex > 0 {
+		// If follower log is shorter than prevLogIndex
+		if len(rf.log) < args.PrevLogIndex {
+			return nil
+		}
+		// If term at prevLogIndex doesn't match
+		if rf.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
+			return nil
+		}
+	}
+
+	// Rule 4: If an existing entry conflicts with a new one (same index, different terms),
+	// delete existing entry and all that follow it
+	for i, entry := range args.Entries {
+		index := args.PrevLogIndex + 1 + i
+		if index <= len(rf.log) {
+			if rf.log[index-1].Term != entry.Term {
+				rf.log = rf.log[:index-1] // Truncate conflicting entries
+				rf.log = append(rf.log, entry)
+			}
+		} else {
+			// Rule 5: Append any new entries not already in the log
+			rf.log = append(rf.log, entry)
+		}
+	}
+
+	// Rule 6: If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+	if args.LeaderCommit > rf.commitIndex {
+		lastNewIndex := len(rf.log)
+		if args.LeaderCommit < lastNewIndex {
+			rf.commitIndex = args.LeaderCommit
+		} else {
+			rf.commitIndex = lastNewIndex
+		}
+	}
+
+	if len(args.Entries) > 0 {
+		fmt.Printf("[Follower %d] Successfully replicated %d log entries. Total log size: %d\n",
+			rf.me, len(args.Entries), len(rf.log))
+	}
+
+	reply.Success = true
+	reply.Term = rf.currentTerm
+	return nil
+}
