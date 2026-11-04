@@ -42,7 +42,6 @@ func (rf *Raft) startElection() {
 
 	fmt.Printf("[Node %d] Started election for Term %d\n", rf.me, rf.currentTerm)
 
-	// Release lock while sending RPCs across the network
 	rf.mu.Unlock()
 	go rf.broadcastRequestVote(currentTerm, candidateId, peersCount)
 	rf.mu.Lock()
@@ -60,10 +59,9 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 		}
 
 		go func(addr string) {
-			// Connect to peer over RPC
 			client, err := rpc.Dial("tcp", addr)
 			if err != nil {
-				return // Peer might be down or unreachable
+				return // Peer might be unreachable
 			}
 			defer client.Close()
 
@@ -81,7 +79,7 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 
-			// Check if reply has a higher term (we are obsolete)
+			// If peer has higher term, step down to Follower
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.role = Follower
@@ -89,13 +87,12 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 				return
 			}
 
-			// If vote granted and we are still running this election
+			// If vote granted and still candidate in this term
 			if reply.VoteGranted && rf.role == Candidate && rf.currentTerm == term {
 				voteMutex.Lock()
 				votesReceived++
 				fmt.Printf("[Node %d] Received vote! Total votes: %d/%d\n", rf.me, votesReceived, majority)
 
-				// Won majority votes -> Become Leader!
 				if votesReceived >= majority && rf.role != Leader {
 					rf.role = Leader
 					fmt.Printf(">>> [Node %d] ELECTED AS LEADER for Term %d! <<<\n", rf.me, rf.currentTerm)

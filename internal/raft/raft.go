@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -42,7 +43,6 @@ type Raft struct {
 func getRandomElectionTimeout() time.Duration {
 	return time.Duration(150+rand.Intn(150)) * time.Millisecond
 }
-
 
 // NewRaft creates and initializes a new Raft node instance
 func NewRaft(peers []string, me int) *Raft {
@@ -105,4 +105,3 @@ func (rf *Raft) RequestVote(args *rpc.RequestVoteArgs, reply *rpc.RequestVoteRep
 	reply.Term = rf.currentTerm
 	return nil
 }
-
