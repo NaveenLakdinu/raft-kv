@@ -92,3 +92,17 @@ func (rf *Raft) RequestVote(args *rpc.RequestVoteArgs, reply *rpc.RequestVoteRep
 		rf.votedFor = -1
 	}
 
+	// Rule 3: Grant vote if we haven't voted for anyone yet in this term
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		rf.votedFor = args.CandidateId
+		rf.lastHeartbeat = time.Now() // Reset election timer when granting vote
+		reply.VoteGranted = true
+		fmt.Printf("[Node %d] Granted vote to Node %d for Term %d\n", rf.me, args.CandidateId, rf.currentTerm)
+	} else {
+		reply.VoteGranted = false
+	}
+
+	reply.Term = rf.currentTerm
+	return nil
+}
+
