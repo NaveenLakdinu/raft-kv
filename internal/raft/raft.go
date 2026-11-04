@@ -150,3 +150,9 @@ func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntr
 
 	return nil
 }
+
+// Start proposes a command to the Raft cluster (used by clients/KV store)
+// Returns index, currentTerm, and true if this node is the leader
+func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
