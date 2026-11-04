@@ -36,3 +36,21 @@ type Raft struct {
 	heartbeatInterval time.Duration
 	electionTimeout   time.Duration
 }
+
+// NewRaft creates and initializes a new Raft node instance
+func NewRaft(peers []string, me int) *Raft {
+	rf := &Raft{
+		peers:             peers,
+		me:                me,
+		role:              Follower,
+		currentTerm:       0,
+		votedFor:          -1,
+		log:               make([]rpc.LogEntry, 0),
+		commitIndex:       0,
+		lastApplied:       0,
+		heartbeatInterval: 50 * time.Millisecond,
+		electionTimeout:   150 * time.Millisecond,
+	}
+
+	return rf
+}
