@@ -26,3 +26,14 @@ func (rf *Raft) runElectionTimer() {
 		rf.mu.Unlock()
 	}
 }
+// startElection converts node into Candidate and increments term
+func (rf *Raft) startElection() {
+	rf.role = Candidate
+	rf.currentTerm++
+	rf.votedFor = rf.me // Vote for self
+	rf.lastHeartbeat = time.Now()
+
+	fmt.Printf("[Node %d] Started election for Term %d\n", rf.me, rf.currentTerm)
+
+	// Note: RequestVote RPC sending logic to peers will be added in the next step
+}
