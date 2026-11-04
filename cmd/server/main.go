@@ -5,45 +5,72 @@ import (
 	"log"
 	"net"
 	"net/rpc"
+	"sync"
 	"time"
 
 	"raft-kv/internal/raft"
 )
 
-// startNode initializes an RPC server and starts a Raft node instance
-func startNode(nodeId int, peerAddresses []string) {
-	// 1. Create a new Raft node instance
+// ServerInstance tracks network listener and raft node for graceful termination
+type ServerInstance struct {
+	nodeId   int
+	raftNode *raft.Raft
+	listener net.Listener
+	mu       sync.Mutex
+	isDead   bool
+}
+
+// Kill stops the RPC listener, simulating a node crash
+func (s *ServerInstance) Kill() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.isDead {
+		s.isDead = true
+		if s.listener != nil {
+			s.listener.Close()
+		}
+		fmt.Printf("💥 [Chaos] Node %d has been KILLED!\n", s.nodeId)
+	}
+}
+
+// startNode initializes an RPC server and returns a pointer to the ServerInstance
+func startNode(nodeId int, peerAddresses []string) *ServerInstance {
 	rf := raft.NewRaft(peerAddresses, nodeId)
 
-	// 2. Register with Go's standard RPC server
 	rpcServer := rpc.NewServer()
 	err := rpcServer.Register(rf)
 	if err != nil {
 		log.Fatalf("Failed to register node %d: %v", nodeId, err)
 	}
 
-	// 3. Listen on assigned TCP port
 	port := peerAddresses[nodeId]
 	listener, err := net.Listen("tcp", port)
 	if err != nil {
 		log.Fatalf("Node %d listen error on %s: %v", nodeId, port, err)
 	}
-	defer listener.Close()
+
+	instance := &ServerInstance{
+		nodeId:   nodeId,
+		raftNode: rf,
+		listener: listener,
+	}
 
 	fmt.Printf("[Cluster] Node %d listening on %s\n", nodeId, port)
 
-	// Accept incoming peer connections
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			return
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return // Terminated gracefully on Kill()
+			}
+			go rpcServer.ServeConn(conn)
 		}
-		go rpcServer.ServeConn(conn)
-	}
+	}()
+
+	return instance
 }
 
 func main() {
-	// Cluster configuration with 3 local nodes
 	peers := []string{
 		"127.0.0.1:8001", // Node 0
 		"127.0.0.1:8002", // Node 1
@@ -51,18 +78,37 @@ func main() {
 	}
 
 	fmt.Println("==================================================")
-	fmt.Println("🚀 Starting 3-Node Raft Cluster on Localhost")
+	fmt.Println("🚀 Starting 3-Node Raft Cluster with Chaos Testing")
 	fmt.Println("==================================================")
 
-	// Start Node 0, Node 1, and Node 2 concurrently
+	nodes := make([]*ServerInstance, len(peers))
 	for i := 0; i < len(peers); i++ {
-		nodeId := i
-		go startNode(nodeId, peers)
+		nodes[i] = startNode(i, peers)
 	}
 
-	// Keep main function alive to observe election and heartbeats
-	time.Sleep(3 * time.Second)
-	fmt.Println("==================================================")
-	fmt.Println("🏁 Test run finished successfully.")
+	// 1. Wait 1.5 seconds for initial leader to be elected
+	time.Sleep(1500 * time.Millisecond)
+
+	// 2. Identify the active leader
+	var leaderInstance *ServerInstance
+	for _, n := range nodes {
+		_, isLeader := n.raftNode.GetState()
+		if isLeader {
+			leaderInstance = n
+			break
+		}
+	}
+
+	if leaderInstance != nil {
+		fmt.Printf("\n⚡ Current Active Leader is Node %d. Simulating unexpected failure...\n", leaderInstance.nodeId)
+		// Kill the leader node
+		leaderInstance.Kill()
+	}
+
+	// 3. Wait 2 seconds to observe re-election among the remaining alive nodes
+	time.Sleep(2000 * time.Millisecond)
+
+	fmt.Println("\n==================================================")
+	fmt.Println("🏁 Failover test completed.")
 	fmt.Println("==================================================")
 }
