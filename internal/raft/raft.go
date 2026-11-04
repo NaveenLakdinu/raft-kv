@@ -156,3 +156,8 @@ func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntr
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	// If not the leader, reject the proposal
+	if rf.role != Leader || rf.killed() {
+		return -1, rf.currentTerm, false
+	}
