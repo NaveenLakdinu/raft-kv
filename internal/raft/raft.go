@@ -177,3 +177,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	return newIndex, newTerm, true
 }
+
+// GetLogLength returns the total number of log entries currently stored
+func (rf *Raft) GetLogLength() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return len(rf.log)
+}
