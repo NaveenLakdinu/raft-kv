@@ -28,3 +28,16 @@ func (rf *Raft) runElectionTimer() {
 		rf.mu.Unlock()
 	}
 }
+
+// startElection converts node into Candidate, increments term, and requests votes
+func (rf *Raft) startElection() {
+	rf.role = Candidate
+	rf.currentTerm++
+	rf.votedFor = rf.me
+	rf.lastHeartbeat = time.Now()
+
+	currentTerm := rf.currentTerm
+	candidateId := rf.me
+	peersCount := len(rf.peers)
+
+	fmt.Printf("[Node %d] Started election for Term %d\n", rf.me, rf.currentTerm)
