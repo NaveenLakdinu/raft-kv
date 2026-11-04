@@ -105,3 +105,8 @@ func (rf *Raft) RequestVote(args *rpc.RequestVoteArgs, reply *rpc.RequestVoteRep
 	reply.Term = rf.currentTerm
 	return nil
 }
+
+// AppendEntries RPC handler invoked by Leader for replication and heartbeats
+func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntriesReply) error {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
