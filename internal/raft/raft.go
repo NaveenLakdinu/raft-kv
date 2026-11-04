@@ -110,3 +110,10 @@ func (rf *Raft) RequestVote(args *rpc.RequestVoteArgs, reply *rpc.RequestVoteRep
 func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntriesReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	// Rule 1: Reply false if term < currentTerm
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		return nil
+	}
