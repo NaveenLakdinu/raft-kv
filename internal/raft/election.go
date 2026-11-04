@@ -47,3 +47,17 @@ func (rf *Raft) startElection() {
 	go rf.broadcastRequestVote(currentTerm, candidateId, peersCount)
 	rf.mu.Lock()
 }
+
+// broadcastRequestVote sends RequestVote RPCs concurrently to all peers
+func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) {
+	var voteMutex sync.Mutex
+	votesReceived := 1 // Vote for self
+	majority := (peersCount / 2) + 1
+
+	for peerIndex, peerAddr := range rf.peers {
+		if peerIndex == candidateId {
+			continue // Skip self
+		}
+
+		go func(addr string) {
+			
