@@ -60,6 +60,7 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 		}
 
 		go func(addr string) {
+			// Connect to peer over RPC
 			client, err := rpc.Dial("tcp", addr)
 			if err != nil {
 				return // Peer might be down or unreachable
