@@ -77,11 +77,18 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) RequestVote(args *rpc.RequestVoteArgs, reply *rpc.RequestVoteReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	
+
 	// Rule 1: If caller's term is smaller, reject vote
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return nil
+	}
+
+	// Rule 2: If caller's term is higher, update currentTerm and step down to Follower
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.role = Follower
+		rf.votedFor = -1
 	}
 
