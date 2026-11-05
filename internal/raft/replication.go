@@ -2,32 +2,40 @@ package raft
 
 import (
 	"fmt"
-	"net/rpc"
 	"time"
 
 	raftrpc "raft-kv/internal/rpc"
 )
 
-// runHeartbeatTicker periodically sends AppendEntries to maintain authority
+// runHeartbeatTicker is started exactly once when this node becomes Leader.
+// It fires at ~60ms intervals (well below the 500ms election timeout floor)
+// and exits as soon as the node loses leadership.
 func (rf *Raft) runHeartbeatTicker() {
-	// Send initial heartbeat immediately upon winning election
+	// Send the first heartbeat immediately so followers reset their timers
+	// before any of them can time out.
 	rf.broadcastAppendEntries()
 
+	ticker := time.NewTicker(60 * time.Millisecond)
+	defer ticker.Stop()
+
 	for !rf.killed() {
-		time.Sleep(50 * time.Millisecond)
+		<-ticker.C
 
 		rf.mu.Lock()
-		if rf.role != Leader {
-			rf.mu.Unlock()
+		isLeader := rf.role == Leader
+		rf.mu.Unlock()
+
+		if !isLeader {
 			return
 		}
-		rf.mu.Unlock()
 
 		rf.broadcastAppendEntries()
 	}
 }
 
-// broadcastAppendEntries sends entries or empty heartbeats to peers concurrently
+// broadcastAppendEntries sends AppendEntries (heartbeat or replication) to every
+// peer concurrently. All state is captured under rf.mu and then released before
+// any network I/O, satisfying the "no RPC under lock" requirement.
 func (rf *Raft) broadcastAppendEntries() {
 	rf.mu.Lock()
 	if rf.role != Leader || rf.killed() {
@@ -35,18 +43,20 @@ func (rf *Raft) broadcastAppendEntries() {
 		return
 	}
 
+	// Snapshot the leader's immutable-for-this-round state.
 	currentTerm := rf.currentTerm
 	leaderId := rf.me
 	commitIndex := rf.commitIndex
-	peersCount := len(rf.peers)
+	logLen := len(rf.log)
 	rf.mu.Unlock()
 
-	for peerIndex, peerAddr := range rf.peers {
+	for peerIndex := range rf.peers {
 		if peerIndex == leaderId {
 			continue
 		}
 
-		go func(peer int, addr string) {
+		go func(peer int) {
+			// --- lock window 1: build the args ---
 			rf.mu.Lock()
 			if rf.role != Leader || rf.killed() {
 				rf.mu.Unlock()
@@ -55,14 +65,17 @@ func (rf *Raft) broadcastAppendEntries() {
 
 			prevLogIndex := rf.nextIndex[peer] - 1
 			prevLogTerm := 0
-			if prevLogIndex > 0 && prevLogIndex <= len(rf.log) {
+			if prevLogIndex > 0 && prevLogIndex <= logLen {
 				prevLogTerm = rf.log[prevLogIndex-1].Term
 			}
 
+			// Copy only the slice we need to avoid holding a reference into
+			// rf.log across the network call.
 			var entriesToSend []raftrpc.LogEntry
-			if len(rf.log) >= rf.nextIndex[peer] {
-				entriesToSend = make([]raftrpc.LogEntry, len(rf.log[rf.nextIndex[peer]-1:]))
-				copy(entriesToSend, rf.log[rf.nextIndex[peer]-1:])
+			if logLen >= rf.nextIndex[peer] {
+				slice := rf.log[rf.nextIndex[peer]-1:]
+				entriesToSend = make([]raftrpc.LogEntry, len(slice))
+				copy(entriesToSend, slice)
 			}
 
 			args := raftrpc.AppendEntriesArgs{
@@ -74,23 +87,26 @@ func (rf *Raft) broadcastAppendEntries() {
 				LeaderCommit: commitIndex,
 			}
 			rf.mu.Unlock()
+			// --- end lock window 1 ---
 
+			// Network call happens with NO lock held.
 			var reply raftrpc.AppendEntriesReply
-			client, err := rpc.Dial("tcp", addr)
-			if err != nil {
-				return
-			}
-			defer client.Close()
-
-			err = client.Call("Raft.AppendEntries", &args, &reply)
+			err := rf.peerConns[peer].call("Raft.AppendEntries", &args, &reply)
 			if err != nil {
 				return
 			}
 
+			// --- lock window 2: process the reply ---
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 
+			// Stale reply: our term or role changed while the RPC was in flight.
+			if rf.role != Leader || rf.currentTerm != currentTerm {
+				return
+			}
+
 			if reply.Term > rf.currentTerm {
+				// Discovered a higher term — step down.
 				rf.currentTerm = reply.Term
 				rf.role = Follower
 				rf.votedFor = -1
@@ -99,32 +115,40 @@ func (rf *Raft) broadcastAppendEntries() {
 				return
 			}
 
-			if rf.role != Leader || rf.currentTerm != currentTerm {
-				return
-			}
-
 			if reply.Success {
-				rf.matchIndex[peer] = args.PrevLogIndex + len(args.Entries)
-				rf.nextIndex[peer] = rf.matchIndex[peer] + 1
-				rf.checkAndAdvanceCommitIndex(peersCount)
+				// Advance matchIndex/nextIndex monotonically (never decrease).
+				newMatch := args.PrevLogIndex + len(args.Entries)
+				if newMatch > rf.matchIndex[peer] {
+					rf.matchIndex[peer] = newMatch
+					rf.nextIndex[peer] = newMatch + 1
+				}
+				rf.checkAndAdvanceCommitIndex()
 			} else {
+				// Consistency check failed — back up nextIndex by one and retry
+				// on the next heartbeat round.
 				if rf.nextIndex[peer] > 1 {
 					rf.nextIndex[peer]--
 				}
 			}
-		}(peerIndex, peerAddr)
+			// --- end lock window 2 ---
+		}(peerIndex)
 	}
 }
 
-func (rf *Raft) checkAndAdvanceCommitIndex(peersCount int) {
-	majority := (peersCount / 2) + 1
+// checkAndAdvanceCommitIndex scans from the end of the log toward commitIndex
+// looking for the highest N such that a majority have matchIndex >= N and
+// log[N-1].Term == currentTerm (§5.4.2).
+// MUST be called with rf.mu held.
+func (rf *Raft) checkAndAdvanceCommitIndex() {
+	majority := (len(rf.peers) / 2) + 1
 
 	for n := len(rf.log); n > rf.commitIndex; n-- {
 		if rf.log[n-1].Term != rf.currentTerm {
+			// Never commit entries from previous terms by counting replicas alone.
 			continue
 		}
 
-		matchCount := 1 // Leader
+		matchCount := 1 // leader itself
 		for i := range rf.peers {
 			if i != rf.me && rf.matchIndex[i] >= n {
 				matchCount++

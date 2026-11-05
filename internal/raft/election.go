@@ -2,116 +2,152 @@ package raft
 
 import (
 	"fmt"
-	"net/rpc"
-	"sync"
 	"time"
 
 	raftrpc "raft-kv/internal/rpc"
 )
 
-// runElectionTimer continuously checks if election timeout elapsed since last valid heartbeat
+// runElectionTimer is the main election-timeout loop.
+// It runs for the lifetime of the node and is the ONLY place that starts elections.
+//
+// Design notes:
+//   - We use a tight 10ms poll loop so the timer fires within ~10ms of its deadline.
+//   - The timeout is re-randomized after every election fires to avoid split-vote loops.
+//   - The lock is held only for the brief state-read window; RPC calls happen outside.
 func (rf *Raft) runElectionTimer() {
 	timeout := rf.getRandomElectionTimeout()
 
 	for !rf.killed() {
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 
 		rf.mu.Lock()
+
+		// Leaders do not need an election timer.
 		if rf.role == Leader {
 			rf.mu.Unlock()
 			continue
 		}
 
-		// If time elapsed exceeds current randomized timeout, trigger an election
-		if time.Since(rf.lastHeartbeat) >= timeout {
-			fmt.Printf("[Node %d] Election timeout elapsed! Transitioning to Candidate...\n", rf.me)
+		elapsed := time.Since(rf.lastHeartbeat)
+		if elapsed >= timeout {
+			fmt.Printf("[Node %d] Election timeout (%dms elapsed, limit %dms) — starting election\n",
+				rf.me, elapsed.Milliseconds(), timeout.Milliseconds())
+
+			// startElection runs entirely with rf.mu held and does NOT make
+			// any network calls itself — it only spawns goroutines.
 			rf.startElection()
-			timeout = rf.getRandomElectionTimeout() // Reset to a fresh random timeout
+
+			// Re-randomize timeout so the next election window is different.
+			timeout = rf.getRandomElectionTimeout()
 		}
+
 		rf.mu.Unlock()
 	}
 }
 
-// startElection converts node into Candidate, increments term, and requests votes
+// startElection converts this node into a Candidate and kicks off a vote broadcast.
+// MUST be called with rf.mu held. Does NOT release or re-acquire rf.mu.
 func (rf *Raft) startElection() {
 	rf.role = Candidate
 	rf.currentTerm++
 	rf.votedFor = rf.me
-	rf.lastHeartbeat = time.Now()
-
-	rf.persist() // Persist updated term and votedFor
+	rf.lastHeartbeat = time.Now() // Reset timer to give the election time to complete.
+	rf.persist()
 
 	currentTerm := rf.currentTerm
 	candidateId := rf.me
-	peersCount := len(rf.peers)
 
-	fmt.Printf("[Node %d] Started election for Term %d\n", rf.me, rf.currentTerm)
+	// Capture log metadata under the lock for the up-to-date check on the peer side.
+	lastLogIndex, lastLogTerm := rf.lastLogIndexAndTerm()
 
-	rf.mu.Unlock()
-	go rf.broadcastRequestVote(currentTerm, candidateId, peersCount)
-	rf.mu.Lock()
+	fmt.Printf("[Node %d] Started election for Term %d\n", rf.me, currentTerm)
+
+	// Launch the broadcast in a separate goroutine so we can release rf.mu immediately.
+	go rf.broadcastRequestVote(currentTerm, candidateId, lastLogIndex, lastLogTerm)
 }
 
-// broadcastRequestVote sends RequestVote RPCs concurrently to all peers
-func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) {
-	var voteMutex sync.Mutex
-	votesReceived := 1 // Self-vote
-	majority := (peersCount / 2) + 1
+// broadcastRequestVote sends RequestVote RPCs concurrently to all peers.
+// It runs entirely WITHOUT rf.mu held; it re-acquires rf.mu only to mutate state.
+func (rf *Raft) broadcastRequestVote(term, candidateId, lastLogIndex, lastLogTerm int) {
+	// votesNeeded is computed once; we self-vote so start at 1.
+	majority := (len(rf.peers) / 2) + 1
+	votes := 1          // self-vote
+	electedOnce := false // guard so we start the heartbeat ticker exactly once
 
-	for peerIndex, peerAddr := range rf.peers {
-		if peerIndex == candidateId {
+	type result struct {
+		peerIdx int
+		reply   raftrpc.RequestVoteReply
+		err     error
+	}
+
+	resultCh := make(chan result, len(rf.peers))
+
+	for i := range rf.peers {
+		if i == candidateId {
+			continue
+		}
+		go func(peerIdx int) {
+			args := raftrpc.RequestVoteArgs{
+				Term:         term,
+				CandidateId:  candidateId,
+				LastLogIndex: lastLogIndex,
+				LastLogTerm:  lastLogTerm,
+			}
+			var reply raftrpc.RequestVoteReply
+			err := rf.peerConns[peerIdx].call("Raft.RequestVote", &args, &reply)
+			resultCh <- result{peerIdx: peerIdx, reply: reply, err: err}
+		}(i)
+	}
+
+	// Collect replies — stop early once we win or learn we are outdated.
+	for i := 0; i < len(rf.peers)-1; i++ {
+		res := <-resultCh
+
+		if res.err != nil {
 			continue
 		}
 
-		go func(addr string) {
-			client, err := rpc.Dial("tcp", addr)
-			if err != nil {
-				return
-			}
-			defer client.Close()
+		rf.mu.Lock()
 
-			args := raftrpc.RequestVoteArgs{
-				Term:        term,
-				CandidateId: candidateId,
-			}
-			var reply raftrpc.RequestVoteReply
+		// If our term has changed since we started, the election is void.
+		if rf.currentTerm != term || rf.role != Candidate {
+			rf.mu.Unlock()
+			return
+		}
 
-			err = client.Call("Raft.RequestVote", &args, &reply)
-			if err != nil {
-				return
-			}
+		if res.reply.Term > rf.currentTerm {
+			// Higher term discovered — step down immediately.
+			rf.currentTerm = res.reply.Term
+			rf.role = Follower
+			rf.votedFor = -1
+			rf.lastHeartbeat = time.Now()
+			rf.persist()
+			rf.mu.Unlock()
+			return
+		}
 
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
+		if res.reply.VoteGranted {
+			votes++
+			fmt.Printf("[Node %d] Received vote from peer %d — total votes: %d/%d\n",
+				rf.me, res.peerIdx, votes, majority)
 
-			if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term
-				rf.role = Follower
-				rf.votedFor = -1
-				rf.lastHeartbeat = time.Now()
-				rf.persist()
-				return
-			}
+			if votes >= majority && !electedOnce {
+				electedOnce = true
+				rf.role = Leader
+				fmt.Printf(">>> [Node %d] ELECTED AS LEADER for Term %d! <<<\n", rf.me, rf.currentTerm)
 
-			if reply.VoteGranted && rf.role == Candidate && rf.currentTerm == term {
-				voteMutex.Lock()
-				votesReceived++
-				fmt.Printf("[Node %d] Received vote! Total votes: %d/%d\n", rf.me, votesReceived, majority)
-
-				if votesReceived >= majority && rf.role != Leader {
-					rf.role = Leader
-					fmt.Printf(">>> [Node %d] ELECTED AS LEADER for Term %d! <<<\n", rf.me, rf.currentTerm)
-
-					for i := range rf.peers {
-						rf.nextIndex[i] = len(rf.log) + 1
-						rf.matchIndex[i] = 0
-					}
-
-					// Send heartbeats immediately to suppress other elections
-					go rf.runHeartbeatTicker()
+				// Reinitialize leader volatile state (§5.3).
+				for j := range rf.peers {
+					rf.nextIndex[j] = len(rf.log) + 1
+					rf.matchIndex[j] = 0
 				}
-				voteMutex.Unlock()
+
+				// Start sending heartbeats immediately — still holding rf.mu so
+				// the goroutine will block until we release, which is fine.
+				go rf.runHeartbeatTicker()
 			}
-		}(peerAddr)
+		}
+
+		rf.mu.Unlock()
 	}
 }
