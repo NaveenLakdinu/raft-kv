@@ -20,3 +20,7 @@ type NodeView struct {
 	IsDead    bool              `json:"is_dead"`
 	Store     map[string]string `json:"store"`
 }
+// ClusterView represents the snapshot of the entire cluster
+type ClusterView struct {
+	Nodes []NodeView `json:"nodes"`
+}
