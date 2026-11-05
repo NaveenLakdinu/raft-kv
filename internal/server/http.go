@@ -39,3 +39,10 @@ type HTTPServer struct {
 	mu    sync.Mutex
 	nodes []*NodeHandle
 }
+
+// NewHTTPServer creates an HTTP dashboard server
+func NewHTTPServer(nodes []*NodeHandle) *HTTPServer {
+	return &HTTPServer{
+		nodes: nodes,
+	}
+}
