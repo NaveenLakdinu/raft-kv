@@ -17,3 +17,9 @@ type PersistentState struct {
 	VotedFor    int
 	Log         []rpc.LogEntry
 }
+
+// Persister handles atomic disk serialization of Raft persistent state
+type Persister struct {
+	mu       sync.Mutex
+	filePath string
+}
