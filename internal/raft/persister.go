@@ -59,3 +59,11 @@ func (p *Persister) SaveState(term int, votedFor int, logEntries []rpc.LogEntry)
 
 	return nil
 }
+
+// ReadState reads and restores persistent state from disk
+func (p *Persister) ReadState() (int, int, []rpc.LogEntry, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	data, err := os.ReadFile(p.filePath)
+	if err != nil {
