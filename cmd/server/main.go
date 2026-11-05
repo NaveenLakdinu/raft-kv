@@ -11,7 +11,6 @@ import (
 	"raft-kv/internal/raft"
 )
 
-// ServerInstance tracks network listener and raft node
 type ServerInstance struct {
 	nodeId   int
 	raftNode *raft.Raft
@@ -20,7 +19,6 @@ type ServerInstance struct {
 	isDead   bool
 }
 
-// Kill stops the RPC listener and marks raft node as dead
 func (s *ServerInstance) Kill() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -34,7 +32,6 @@ func (s *ServerInstance) Kill() {
 	}
 }
 
-// startNode initializes an RPC server and returns a pointer to the ServerInstance
 func startNode(nodeId int, peerAddresses []string) *ServerInstance {
 	rf := raft.NewRaft(peerAddresses, nodeId)
 
@@ -71,9 +68,9 @@ func startNode(nodeId int, peerAddresses []string) *ServerInstance {
 
 func main() {
 	peers := []string{
-		"127.0.0.1:8001", // Node 0
-		"127.0.0.1:8002", // Node 1
-		"127.0.0.1:8003", // Node 2
+		"127.0.0.1:8001",
+		"127.0.0.1:8002",
+		"127.0.0.1:8003",
 	}
 
 	fmt.Println("==================================================")
@@ -83,10 +80,11 @@ func main() {
 	nodes := make([]*ServerInstance, len(peers))
 	for i := 0; i < len(peers); i++ {
 		nodes[i] = startNode(i, peers)
+		time.Sleep(50 * time.Millisecond) // Give network listeners brief headstart
 	}
 
-	// 1. Wait 1.5 seconds for leader election to settle
-	time.Sleep(1500 * time.Millisecond)
+	// 1. Wait for leader election to settle
+	time.Sleep(2000 * time.Millisecond)
 
 	// 2. Locate the active leader
 	var leaderInstance *ServerInstance
@@ -123,7 +121,7 @@ func main() {
 		fmt.Printf("Client -> Submitted: '%s' (Assigned Index: %d, Term: %d)\n", cmd2, index2, term2)
 	}
 
-	// 5. Wait 1 second for heartbeats and replication rounds to complete
+	// 5. Wait for replication rounds to complete
 	time.Sleep(1000 * time.Millisecond)
 
 	fmt.Println("--------------------------------------------------")

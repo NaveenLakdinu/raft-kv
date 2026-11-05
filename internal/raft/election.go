@@ -9,10 +9,10 @@ import (
 	raftrpc "raft-kv/internal/rpc"
 )
 
-// runElectionTimer monitors heartbeats and triggers an election when timeout occurs
 func (rf *Raft) runElectionTimer() {
 	for !rf.killed() {
-		time.Sleep(20 * time.Millisecond)
+		timeout := rf.getRandomElectionTimeout()
+		time.Sleep(timeout)
 
 		rf.mu.Lock()
 		if rf.role == Leader {
@@ -20,8 +20,7 @@ func (rf *Raft) runElectionTimer() {
 			continue
 		}
 
-		timeout := getRandomElectionTimeout()
-		if time.Since(rf.lastHeartbeat) > timeout {
+		if time.Since(rf.lastHeartbeat) >= timeout {
 			fmt.Printf("[Node %d] Election timeout elapsed! Transitioning to Candidate...\n", rf.me)
 			rf.startElection()
 		}
@@ -29,7 +28,6 @@ func (rf *Raft) runElectionTimer() {
 	}
 }
 
-// startElection converts node into Candidate, increments term, and requests votes
 func (rf *Raft) startElection() {
 	rf.role = Candidate
 	rf.currentTerm++
@@ -47,15 +45,14 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 }
 
-// broadcastRequestVote sends RequestVote RPCs concurrently to all peers
 func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) {
 	var voteMutex sync.Mutex
-	votesReceived := 1 // Self vote
+	votesReceived := 1
 	majority := (peersCount / 2) + 1
 
 	for peerIndex, peerAddr := range rf.peers {
 		if peerIndex == candidateId {
-			continue // Skip self
+			continue
 		}
 
 		go func(addr string) {
@@ -95,7 +92,6 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 					rf.role = Leader
 					fmt.Printf(">>> [Node %d] ELECTED AS LEADER for Term %d! <<<\n", rf.me, rf.currentTerm)
 
-					// Initialize nextIndex and matchIndex for all peers
 					for i := range rf.peers {
 						rf.nextIndex[i] = len(rf.log) + 1
 						rf.matchIndex[i] = 0
