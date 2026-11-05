@@ -52,3 +52,10 @@ func (p *Persister) SaveState(term int, votedFor int, logEntries []rpc.LogEntry)
 	if err := enc.Encode(state); err != nil {
 		return fmt.Errorf("gob encode error: %w", err)
 	}
+	// Write to disk atomically using WriteFile
+	if err := os.WriteFile(p.filePath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed writing state to disk: %w", err)
+	}
+
+	return nil
+}
