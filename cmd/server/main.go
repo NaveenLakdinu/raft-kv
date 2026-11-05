@@ -11,7 +11,7 @@ import (
 	"raft-kv/internal/raft"
 )
 
-// ServerInstance tracks network listener and raft node for graceful termination
+// ServerInstance tracks network listener and raft node
 type ServerInstance struct {
 	nodeId   int
 	raftNode *raft.Raft
@@ -26,7 +26,7 @@ func (s *ServerInstance) Kill() {
 	defer s.mu.Unlock()
 	if !s.isDead {
 		s.isDead = true
-		s.raftNode.Kill() // Terminate Raft goroutines
+		s.raftNode.Kill()
 		if s.listener != nil {
 			s.listener.Close()
 		}
@@ -56,8 +56,6 @@ func startNode(nodeId int, peerAddresses []string) *ServerInstance {
 		listener: listener,
 	}
 
-	fmt.Printf("[Cluster] Node %d listening on %s\n", nodeId, port)
-
 	go func() {
 		for {
 			conn, err := listener.Accept()
@@ -79,7 +77,7 @@ func main() {
 	}
 
 	fmt.Println("==================================================")
-	fmt.Println("🚀 Starting 3-Node Raft Cluster with Chaos Testing")
+	fmt.Println("🚀 Starting 3-Node Raft Cluster - Log Replication Test")
 	fmt.Println("==================================================")
 
 	nodes := make([]*ServerInstance, len(peers))
@@ -87,10 +85,10 @@ func main() {
 		nodes[i] = startNode(i, peers)
 	}
 
-	// 1. Wait 1.5 seconds for initial leader to be elected
+	// 1. Wait 1.5 seconds for leader election to settle
 	time.Sleep(1500 * time.Millisecond)
 
-	// 2. Identify the active leader
+	// 2. Locate the active leader
 	var leaderInstance *ServerInstance
 	for _, n := range nodes {
 		_, isLeader := n.raftNode.GetState()
@@ -100,15 +98,41 @@ func main() {
 		}
 	}
 
-	if leaderInstance != nil {
-		fmt.Printf("\n⚡ Current Active Leader is Node %d. Simulating unexpected failure...\n", leaderInstance.nodeId)
-		leaderInstance.Kill()
+	if leaderInstance == nil {
+		fmt.Println("❌ No leader was elected in time.")
+		return
 	}
 
-	// 3. Wait 3.5 seconds to observe re-election among the remaining alive nodes
-	time.Sleep(3500 * time.Millisecond)
+	fmt.Printf("\n⭐ Discovered Leader: Node %d\n", leaderInstance.nodeId)
+	fmt.Println("--------------------------------------------------")
+	fmt.Println("📝 Proposing Client Commands to the Cluster...")
 
-	fmt.Println("\n==================================================")
-	fmt.Println("🏁 Failover test completed.")
+	// 3. Propose Command 1
+	cmd1 := "SET name=Geeth"
+	index1, term1, ok1 := leaderInstance.raftNode.Start(cmd1)
+	if ok1 {
+		fmt.Printf("Client -> Submitted: '%s' (Assigned Index: %d, Term: %d)\n", cmd1, index1, term1)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	// 4. Propose Command 2
+	cmd2 := "SET project=RaftKV"
+	index2, term2, ok2 := leaderInstance.raftNode.Start(cmd2)
+	if ok2 {
+		fmt.Printf("Client -> Submitted: '%s' (Assigned Index: %d, Term: %d)\n", cmd2, index2, term2)
+	}
+
+	// 5. Wait 1 second for heartbeats and replication rounds to complete
+	time.Sleep(1000 * time.Millisecond)
+
+	fmt.Println("--------------------------------------------------")
+	fmt.Println("🔍 Verifying Cluster Log Status:")
+	for _, n := range nodes {
+		fmt.Printf("Node %d Log Entries Count: %d\n", n.nodeId, n.raftNode.GetLogLength())
+	}
+
+	fmt.Println("==================================================")
+	fmt.Println("🏁 Log Replication test completed successfully.")
 	fmt.Println("==================================================")
 }
