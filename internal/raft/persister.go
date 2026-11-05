@@ -35,3 +35,20 @@ func NewPersister(nodeId int) *Persister {
 		filePath: filepath.Join(dir, fmt.Sprintf("node_%d.raft", nodeId)),
 	}
 }
+
+// SaveState serializes and atomically writes the state to disk
+func (p *Persister) SaveState(term int, votedFor int, logEntries []rpc.LogEntry) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	state := PersistentState{
+		CurrentTerm: term,
+		VotedFor:    votedFor,
+		Log:         logEntries,
+	}
+
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(state); err != nil {
+		return fmt.Errorf("gob encode error: %w", err)
+	}
