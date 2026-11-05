@@ -81,3 +81,29 @@ func NewKVStore() *KVStore {
 		data: make(map[string]string),
 	}
 }
+
+// Apply executes a command against the state machine
+func (kv *KVStore) Apply(cmd Command) (string, bool) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	switch cmd.Op {
+	case OpPut:
+		kv.data[cmd.Key] = cmd.Value
+		return cmd.Value, true
+
+	case OpGet:
+		val, exists := kv.data[cmd.Key]
+		return val, exists
+
+	case OpDelete:
+		_, exists := kv.data[cmd.Key]
+		if exists {
+			delete(kv.data, cmd.Key)
+		}
+		return "", exists
+
+	default:
+		return "", false
+	}
+}
