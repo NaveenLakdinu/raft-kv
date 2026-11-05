@@ -24,3 +24,12 @@ type NodeView struct {
 type ClusterView struct {
 	Nodes []NodeView `json:"nodes"`
 }
+
+// NodeHandle holds references to a node instance
+type NodeHandle struct {
+	ID       int
+	RaftNode *raft.Raft
+	KVStore  *kv.KVStore
+	KillFunc func()
+	IsDead   func() bool
+}
