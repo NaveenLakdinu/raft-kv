@@ -8,12 +8,16 @@ import (
 	"sync"
 	"time"
 
+	"raft-kv/internal/kv"
 	"raft-kv/internal/raft"
+	raftrpc "raft-kv/internal/rpc"
 )
 
 type ServerInstance struct {
 	nodeId   int
 	raftNode *raft.Raft
+	kvStore  *kv.KVStore
+	applyCh  chan raftrpc.ApplyMsg
 	listener net.Listener
 	mu       sync.Mutex
 	isDead   bool
@@ -32,8 +36,27 @@ func (s *ServerInstance) Kill() {
 	}
 }
 
+// listenApplier reads committed ApplyMsgs and applies them to the KVStore
+func (s *ServerInstance) listenApplier() {
+	for msg := range s.applyCh {
+		if msg.CommandValid {
+			rawCmd, ok := msg.Command.(string)
+			if ok {
+				cmd, err := kv.ParseCommand(rawCmd)
+				if err == nil {
+					s.kvStore.Apply(cmd)
+					fmt.Printf("📦 [Node %d StateMachine] Applied '%s' at Index %d | Current Store: %v\n",
+						s.nodeId, rawCmd, msg.CommandIndex, s.kvStore.Snapshot())
+				}
+			}
+		}
+	}
+}
+
 func startNode(nodeId int, peerAddresses []string) *ServerInstance {
-	rf := raft.NewRaft(peerAddresses, nodeId)
+	applyCh := make(chan raftrpc.ApplyMsg, 100)
+	kvStore := kv.NewKVStore()
+	rf := raft.NewRaft(peerAddresses, nodeId, applyCh)
 
 	rpcServer := rpc.NewServer()
 	err := rpcServer.Register(rf)
@@ -50,8 +73,13 @@ func startNode(nodeId int, peerAddresses []string) *ServerInstance {
 	instance := &ServerInstance{
 		nodeId:   nodeId,
 		raftNode: rf,
+		kvStore:  kvStore,
+		applyCh:  applyCh,
 		listener: listener,
 	}
+
+	// Start reading committed messages into KVStore
+	go instance.listenApplier()
 
 	go func() {
 		for {
@@ -74,19 +102,17 @@ func main() {
 	}
 
 	fmt.Println("==================================================")
-	fmt.Println("🚀 Starting 3-Node Raft Cluster - Log Replication Test")
+	fmt.Println("🚀 3-Node Raft Cluster - End-to-End KV State Machine Test")
 	fmt.Println("==================================================")
 
 	nodes := make([]*ServerInstance, len(peers))
 	for i := 0; i < len(peers); i++ {
 		nodes[i] = startNode(i, peers)
-		time.Sleep(50 * time.Millisecond) // Give network listeners brief headstart
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	// 1. Wait for leader election to settle
 	time.Sleep(2000 * time.Millisecond)
 
-	// 2. Locate the active leader
 	var leaderInstance *ServerInstance
 	for _, n := range nodes {
 		_, isLeader := n.raftNode.GetState()
@@ -103,34 +129,28 @@ func main() {
 
 	fmt.Printf("\n⭐ Discovered Leader: Node %d\n", leaderInstance.nodeId)
 	fmt.Println("--------------------------------------------------")
-	fmt.Println("📝 Proposing Client Commands to the Cluster...")
+	fmt.Println("📝 Executing Distributed KV Operations...")
 
-	// 3. Propose Command 1
+	// 1. Propose SET name=Geeth
 	cmd1 := "SET name=Geeth"
-	index1, term1, ok1 := leaderInstance.raftNode.Start(cmd1)
-	if ok1 {
-		fmt.Printf("Client -> Submitted: '%s' (Assigned Index: %d, Term: %d)\n", cmd1, index1, term1)
-	}
+	leaderInstance.raftNode.Start(cmd1)
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 
-	// 4. Propose Command 2
-	cmd2 := "SET project=RaftKV"
-	index2, term2, ok2 := leaderInstance.raftNode.Start(cmd2)
-	if ok2 {
-		fmt.Printf("Client -> Submitted: '%s' (Assigned Index: %d, Term: %d)\n", cmd2, index2, term2)
-	}
+	// 2. Propose SET role=SoftwareEngineer
+	cmd2 := "SET role=SoftwareEngineer"
+	leaderInstance.raftNode.Start(cmd2)
 
-	// 5. Wait for replication rounds to complete
+	// Wait for replication and state machine execution
 	time.Sleep(1000 * time.Millisecond)
 
 	fmt.Println("--------------------------------------------------")
-	fmt.Println("🔍 Verifying Cluster Log Status:")
+	fmt.Println("🔍 Verifying State Machine Consistency Across All Nodes:")
 	for _, n := range nodes {
-		fmt.Printf("Node %d Log Entries Count: %d\n", n.nodeId, n.raftNode.GetLogLength())
+		fmt.Printf("Node %d KV Store Data: %v\n", n.nodeId, n.kvStore.Snapshot())
 	}
 
 	fmt.Println("==================================================")
-	fmt.Println("🏁 Log Replication test completed successfully.")
+	fmt.Println("🏁 State Machine execution test completed successfully.")
 	fmt.Println("==================================================")
 }

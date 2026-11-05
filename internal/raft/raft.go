@@ -31,6 +31,7 @@ type Raft struct {
 
 	commitIndex int
 	lastApplied int
+	applyCh     chan rpc.ApplyMsg
 
 	nextIndex  []int
 	matchIndex []int
@@ -38,7 +39,6 @@ type Raft struct {
 	lastHeartbeat time.Time
 }
 
-// Ensure unique random seed per node so timers don't clash
 func (rf *Raft) getRandomElectionTimeout() time.Duration {
 	r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(rf.me*1000)))
 	return time.Duration(300+r.Intn(300)) * time.Millisecond
@@ -52,7 +52,8 @@ func (rf *Raft) killed() bool {
 	return atomic.LoadInt32(&rf.dead) == 1
 }
 
-func NewRaft(peers []string, me int) *Raft {
+// NewRaft creates and initializes a new Raft node instance with applyCh
+func NewRaft(peers []string, me int, applyCh chan rpc.ApplyMsg) *Raft {
 	rf := &Raft{
 		peers:         peers,
 		me:            me,
@@ -62,6 +63,7 @@ func NewRaft(peers []string, me int) *Raft {
 		log:           make([]rpc.LogEntry, 0),
 		commitIndex:   0,
 		lastApplied:   0,
+		applyCh:       applyCh,
 		nextIndex:     make([]int, len(peers)),
 		matchIndex:    make([]int, len(peers)),
 		lastHeartbeat: time.Now(),
@@ -73,8 +75,35 @@ func NewRaft(peers []string, me int) *Raft {
 	}
 
 	go rf.runElectionTimer()
+	go rf.runApplier() // Start background applier goroutine
 
 	return rf
+}
+
+// runApplier pushes committed log entries to applyCh sequentially
+func (rf *Raft) runApplier() {
+	for !rf.killed() {
+		time.Sleep(10 * time.Millisecond)
+
+		var msgs []rpc.ApplyMsg
+
+		rf.mu.Lock()
+		for rf.commitIndex > rf.lastApplied {
+			rf.lastApplied++
+			entry := rf.log[rf.lastApplied-1]
+			msgs = append(msgs, rpc.ApplyMsg{
+				CommandValid: true,
+				Command:      entry.Command,
+				CommandIndex: entry.Index,
+			})
+		}
+		rf.mu.Unlock()
+
+		// Deliver messages to channel outside of mutex lock to avoid deadlocks
+		for _, msg := range msgs {
+			rf.applyCh <- msg
+		}
+	}
 }
 
 func (rf *Raft) GetState() (int, bool) {
