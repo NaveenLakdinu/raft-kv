@@ -20,6 +20,7 @@ type NodeView struct {
 	IsDead    bool              `json:"is_dead"`
 	Store     map[string]string `json:"store"`
 }
+
 // ClusterView represents the snapshot of the entire cluster
 type ClusterView struct {
 	Nodes []NodeView `json:"nodes"`
@@ -162,9 +163,7 @@ func (s *HTTPServer) handleKill(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Node not found", http.StatusNotFound)
 }
 
-func (s *HTTPServer) handleIndex(w http.ResponseWriter, r *http.Request) {
-	tmpl := `
-<!DOCTYPE html>
+const htmlDashboard = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -237,44 +236,46 @@ func (s *HTTPServer) handleIndex(w http.ResponseWriter, r *http.Request) {
           cardBorder = "border-rose-900/60 opacity-60";
         }
 
-        const storeItems = Object.entries(node.store).map(([k, v]) => 
-          '<div class="flex justify-between py-1 border-b border-slate-800 text-xs"><span class="text-slate-400">' + k + '</span><span class="font-mono text-cyan-300 font-medium">' + v + '</span></div>'
-        ).join('') || '<div class="text-xs text-slate-500 italic py-1">Store is currently empty</div>';
+        const storeEntries = Object.entries(node.store);
+        let storeHtml = '<div class="text-xs text-slate-500 italic py-1">Store is currently empty</div>';
+        if (storeEntries.length > 0) {
+          storeHtml = storeEntries.map(function(pair) {
+            return '<div class="flex justify-between py-1 border-b border-slate-800 text-xs">' +
+                   '<span class="text-slate-400">' + pair[0] + '</span>' +
+                   '<span class="font-mono text-cyan-300 font-medium">' + pair[1] + '</span>' +
+                   '</div>';
+          }).join('');
+        }
 
-        const killBtn = node.is_dead 
-          ? '<span class="text-xs text-rose-400 font-semibold uppercase">Node Offline</span>'
-          : '<button onclick="killNode(' + node.id + ')" class="text-xs bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30 px-3 py-1.5 rounded transition font-medium">💥 Kill Node</button>';
+        let killBtn = '<button onclick="killNode(' + node.id + ')" class="text-xs bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30 px-3 py-1.5 rounded transition font-medium">💥 Kill Node</button>';
+        if (node.is_dead) {
+          killBtn = '<span class="text-xs text-rose-400 font-semibold uppercase">Node Offline</span>';
+        }
 
-        grid.innerHTML += `
-          <div class="card-glass rounded-xl p-6 border ${cardBorder} transition duration-300">
-            <div class="flex justify-between items-center mb-4">
-              <span class="text-lg font-bold text-white">Node ${node.id}</span>
-              <span class="text-xs px-2.5 py-1 rounded-full border font-semibold ${badgeColor}">${node.role}</span>
-            </div>
+        const card = document.createElement('div');
+        card.className = 'card-glass rounded-xl p-6 border ' + cardBorder + ' transition duration-300';
+        card.innerHTML = 
+          '<div class="flex justify-between items-center mb-4">' +
+            '<span class="text-lg font-bold text-white">Node ' + node.id + '</span>' +
+            '<span class="text-xs px-2.5 py-1 rounded-full border font-semibold ' + badgeColor + '">' + node.role + '</span>' +
+          '</div>' +
+          '<div class="space-y-2 mb-5 text-sm">' +
+            '<div class="flex justify-between text-slate-400 text-xs">' +
+              '<span>Current Term:</span>' +
+              '<span class="font-mono font-bold text-white">' + node.term + '</span>' +
+            '</div>' +
+            '<div class="flex justify-between text-slate-400 text-xs">' +
+              '<span>Committed Log Entries:</span>' +
+              '<span class="font-mono font-bold text-white">' + node.log_length + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="bg-slate-900/80 rounded-lg p-3 border border-slate-800 mb-5">' +
+            '<div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-2">In-Memory State Machine</div>' +
+            '<div class="max-h-28 overflow-y-auto pr-1">' + storeHtml + '</div>' +
+          '</div>' +
+          '<div class="flex justify-end pt-2 border-t border-slate-800">' + killBtn + '</div>';
 
-            <div class="space-y-2 mb-5 text-sm">
-              <div class="flex justify-between text-slate-400 text-xs">
-                <span>Current Term:</span>
-                <span class="font-mono font-bold text-white">${node.term}</span>
-              </div>
-              <div class="flex justify-between text-slate-400 text-xs">
-                <span>Committed Log Entries:</span>
-                <span class="font-mono font-bold text-white">${node.log_length}</span>
-              </div>
-            </div>
-
-            <div class="bg-slate-900/80 rounded-lg p-3 border border-slate-800 mb-5">
-              <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-2">In-Memory State Machine</div>
-              <div class="max-h-28 overflow-y-auto pr-1">
-                ${storeItems}
-              </div>
-            </div>
-
-            <div class="flex justify-end pt-2 border-t border-slate-800">
-              ${killBtn}
-            </div>
-          </div>
-        `;
+        grid.appendChild(card);
       });
     }
 
@@ -306,13 +307,13 @@ func (s *HTTPServer) handleIndex(w http.ResponseWriter, r *http.Request) {
       fetchCluster();
     }
 
-    // Live polling every 500ms
     setInterval(fetchCluster, 500);
     fetchCluster();
   </script>
 </body>
-</html>
-`
-	t, _ := template.New("index").Parse(tmpl)
+</html>`
+
+func (s *HTTPServer) handleIndex(w http.ResponseWriter, r *http.Request) {
+	t, _ := template.New("index").Parse(htmlDashboard)
 	t.Execute(w, nil)
 }

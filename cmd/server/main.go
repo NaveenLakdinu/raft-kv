@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"net/rpc"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"raft-kv/internal/kv"
 	"raft-kv/internal/raft"
 	raftrpc "raft-kv/internal/rpc"
+	"raft-kv/internal/server"
 )
 
 type ServerInstance struct {
@@ -36,7 +38,12 @@ func (s *ServerInstance) Kill() {
 	}
 }
 
-// listenApplier reads committed ApplyMsgs and applies them to the KVStore
+func (s *ServerInstance) IsDead() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.isDead
+}
+
 func (s *ServerInstance) listenApplier() {
 	for msg := range s.applyCh {
 		if msg.CommandValid {
@@ -45,8 +52,8 @@ func (s *ServerInstance) listenApplier() {
 				cmd, err := kv.ParseCommand(rawCmd)
 				if err == nil {
 					s.kvStore.Apply(cmd)
-					fmt.Printf("📦 [Node %d StateMachine] Applied '%s' at Index %d | Current Store: %v\n",
-						s.nodeId, rawCmd, msg.CommandIndex, s.kvStore.Snapshot())
+					fmt.Printf("📦 [Node %d StateMachine] Applied '%s' at Index %d\n",
+						s.nodeId, rawCmd, msg.CommandIndex)
 				}
 			}
 		}
@@ -78,7 +85,6 @@ func startNode(nodeId int, peerAddresses []string) *ServerInstance {
 		listener: listener,
 	}
 
-	// Start reading committed messages into KVStore
 	go instance.listenApplier()
 
 	go func() {
@@ -102,55 +108,37 @@ func main() {
 	}
 
 	fmt.Println("==================================================")
-	fmt.Println("🚀 3-Node Raft Cluster - End-to-End KV State Machine Test")
+	fmt.Println("🚀 3-Node Raft Cluster with Interactive Web Dashboard")
 	fmt.Println("==================================================")
 
 	nodes := make([]*ServerInstance, len(peers))
+	var handles []*server.NodeHandle
+
 	for i := 0; i < len(peers); i++ {
-		nodes[i] = startNode(i, peers)
+		inst := startNode(i, peers)
+		nodes[i] = inst
+		handles = append(handles, &server.NodeHandle{
+			ID:       inst.nodeId,
+			RaftNode: inst.raftNode,
+			KVStore:  inst.kvStore,
+			KillFunc: inst.Kill,
+			IsDead:   inst.IsDead,
+		})
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	time.Sleep(2000 * time.Millisecond)
+	// Start Web Dashboard on port 8080
+	httpDashboard := server.NewHTTPServer(handles)
+	httpDashboard.RegisterRoutes()
 
-	var leaderInstance *ServerInstance
-	for _, n := range nodes {
-		_, isLeader := n.raftNode.GetState()
-		if isLeader {
-			leaderInstance = n
-			break
+	go func() {
+		dashboardPort := ":8080"
+		fmt.Printf("\n🌐 Interactive Dashboard running at: http://localhost%s\n", dashboardPort)
+		if err := http.ListenAndServe(dashboardPort, nil); err != nil {
+			log.Fatalf("HTTP server error: %v", err)
 		}
-	}
+	}()
 
-	if leaderInstance == nil {
-		fmt.Println("❌ No leader was elected in time.")
-		return
-	}
-
-	fmt.Printf("\n⭐ Discovered Leader: Node %d\n", leaderInstance.nodeId)
-	fmt.Println("--------------------------------------------------")
-	fmt.Println("📝 Executing Distributed KV Operations...")
-
-	// 1. Propose SET name=Geeth
-	cmd1 := "SET name=Geeth"
-	leaderInstance.raftNode.Start(cmd1)
-
-	time.Sleep(250 * time.Millisecond)
-
-	// 2. Propose SET role=SoftwareEngineer
-	cmd2 := "SET role=SoftwareEngineer"
-	leaderInstance.raftNode.Start(cmd2)
-
-	// Wait for replication and state machine execution
-	time.Sleep(1000 * time.Millisecond)
-
-	fmt.Println("--------------------------------------------------")
-	fmt.Println("🔍 Verifying State Machine Consistency Across All Nodes:")
-	for _, n := range nodes {
-		fmt.Printf("Node %d KV Store Data: %v\n", n.nodeId, n.kvStore.Snapshot())
-	}
-
-	fmt.Println("==================================================")
-	fmt.Println("🏁 State Machine execution test completed successfully.")
-	fmt.Println("==================================================")
+	// Keep server running indefinitely for user interaction
+	select {}
 }
