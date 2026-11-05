@@ -19,20 +19,24 @@ const (
 )
 
 type Raft struct {
-	mu    sync.Mutex
-	peers []string
-	me    int
-	role  NodeRole
-	dead  int32
+	mu        sync.Mutex
+	peers     []string
+	me        int
+	role      NodeRole
+	dead      int32
+	persister *Persister
 
+	// Persistent state on all servers (saved to disk before responding)
 	currentTerm int
 	votedFor    int
 	log         []rpc.LogEntry
 
+	// Volatile state on all servers
 	commitIndex int
 	lastApplied int
 	applyCh     chan rpc.ApplyMsg
 
+	// Volatile state on leaders
 	nextIndex  []int
 	matchIndex []int
 
@@ -52,8 +56,32 @@ func (rf *Raft) killed() bool {
 	return atomic.LoadInt32(&rf.dead) == 1
 }
 
-// NewRaft creates and initializes a new Raft node instance with applyCh
+// persist writes state to disk atomically (Caller must hold rf.mu)
+func (rf *Raft) persist() {
+	if rf.persister != nil {
+		_ = rf.persister.SaveState(rf.currentTerm, rf.votedFor, rf.log)
+	}
+}
+
+// readPersist restores saved state from disk if present
+func (rf *Raft) readPersist() {
+	if rf.persister == nil {
+		return
+	}
+	term, votedFor, savedLog, found := rf.persister.ReadState()
+	if found {
+		rf.currentTerm = term
+		rf.votedFor = votedFor
+		rf.log = savedLog
+		fmt.Printf("💾 [Node %d Recovery] Restored from disk: Term %d, VotedFor %d, Log Entries %d\n",
+			rf.me, rf.currentTerm, rf.votedFor, len(rf.log))
+	}
+}
+
+// NewRaft creates and initializes a new Raft node instance with applyCh and Disk Persister
 func NewRaft(peers []string, me int, applyCh chan rpc.ApplyMsg) *Raft {
+	persister := NewPersister(me)
+
 	rf := &Raft{
 		peers:         peers,
 		me:            me,
@@ -64,6 +92,7 @@ func NewRaft(peers []string, me int, applyCh chan rpc.ApplyMsg) *Raft {
 		commitIndex:   0,
 		lastApplied:   0,
 		applyCh:       applyCh,
+		persister:     persister,
 		nextIndex:     make([]int, len(peers)),
 		matchIndex:    make([]int, len(peers)),
 		lastHeartbeat: time.Now(),
@@ -74,13 +103,15 @@ func NewRaft(peers []string, me int, applyCh chan rpc.ApplyMsg) *Raft {
 		rf.matchIndex[i] = 0
 	}
 
+	// Restore state from disk before handling traffic
+	rf.readPersist()
+
 	go rf.runElectionTimer()
-	go rf.runApplier() // Start background applier goroutine
+	go rf.runApplier()
 
 	return rf
 }
 
-// runApplier pushes committed log entries to applyCh sequentially
 func (rf *Raft) runApplier() {
 	for !rf.killed() {
 		time.Sleep(10 * time.Millisecond)
@@ -99,7 +130,6 @@ func (rf *Raft) runApplier() {
 		}
 		rf.mu.Unlock()
 
-		// Deliver messages to channel outside of mutex lock to avoid deadlocks
 		for _, msg := range msgs {
 			rf.applyCh <- msg
 		}
@@ -133,7 +163,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.matchIndex[rf.me] = newIndex
 	rf.nextIndex[rf.me] = newIndex + 1
 
-	fmt.Printf("[Leader %d] Appended entry at Index %d: %v\n", rf.me, newIndex, command)
+	// Persist log to disk immediately
+	rf.persist()
+
+	fmt.Printf("[Leader %d] Appended entry at Index %d (Persisted to disk): %v\n", rf.me, newIndex, command)
 
 	return newIndex, newTerm, true
 }
@@ -162,11 +195,13 @@ func (rf *Raft) RequestVote(args *rpc.RequestVoteArgs, reply *rpc.RequestVoteRep
 		rf.currentTerm = args.Term
 		rf.role = Follower
 		rf.votedFor = -1
+		rf.persist()
 	}
 
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		rf.votedFor = args.CandidateId
 		rf.lastHeartbeat = time.Now()
+		rf.persist() // Persist votedFor to disk
 		reply.VoteGranted = true
 		fmt.Printf("[Node %d] Granted vote to Node %d for Term %d\n", rf.me, args.CandidateId, rf.currentTerm)
 	} else {
@@ -196,6 +231,7 @@ func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntr
 		rf.currentTerm = args.Term
 		rf.role = Follower
 		rf.votedFor = -1
+		rf.persist()
 	}
 
 	rf.lastHeartbeat = time.Now()
@@ -209,16 +245,23 @@ func (rf *Raft) AppendEntries(args *rpc.AppendEntriesArgs, reply *rpc.AppendEntr
 		}
 	}
 
+	modified := false
 	for i, entry := range args.Entries {
 		index := args.PrevLogIndex + 1 + i
 		if index <= len(rf.log) {
 			if rf.log[index-1].Term != entry.Term {
 				rf.log = rf.log[:index-1]
 				rf.log = append(rf.log, entry)
+				modified = true
 			}
 		} else {
 			rf.log = append(rf.log, entry)
+			modified = true
 		}
+	}
+
+	if modified {
+		rf.persist() // Persist replicated entries to disk
 	}
 
 	if args.LeaderCommit > rf.commitIndex {

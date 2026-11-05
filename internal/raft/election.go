@@ -9,10 +9,12 @@ import (
 	raftrpc "raft-kv/internal/rpc"
 )
 
+// runElectionTimer continuously checks if election timeout elapsed since last valid heartbeat
 func (rf *Raft) runElectionTimer() {
+	timeout := rf.getRandomElectionTimeout()
+
 	for !rf.killed() {
-		timeout := rf.getRandomElectionTimeout()
-		time.Sleep(timeout)
+		time.Sleep(25 * time.Millisecond)
 
 		rf.mu.Lock()
 		if rf.role == Leader {
@@ -20,19 +22,24 @@ func (rf *Raft) runElectionTimer() {
 			continue
 		}
 
+		// If time elapsed exceeds current randomized timeout, trigger an election
 		if time.Since(rf.lastHeartbeat) >= timeout {
 			fmt.Printf("[Node %d] Election timeout elapsed! Transitioning to Candidate...\n", rf.me)
 			rf.startElection()
+			timeout = rf.getRandomElectionTimeout() // Reset to a fresh random timeout
 		}
 		rf.mu.Unlock()
 	}
 }
 
+// startElection converts node into Candidate, increments term, and requests votes
 func (rf *Raft) startElection() {
 	rf.role = Candidate
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	rf.lastHeartbeat = time.Now()
+
+	rf.persist() // Persist updated term and votedFor
 
 	currentTerm := rf.currentTerm
 	candidateId := rf.me
@@ -45,9 +52,10 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 }
 
+// broadcastRequestVote sends RequestVote RPCs concurrently to all peers
 func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) {
 	var voteMutex sync.Mutex
-	votesReceived := 1
+	votesReceived := 1 // Self-vote
 	majority := (peersCount / 2) + 1
 
 	for peerIndex, peerAddr := range rf.peers {
@@ -80,6 +88,8 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 				rf.currentTerm = reply.Term
 				rf.role = Follower
 				rf.votedFor = -1
+				rf.lastHeartbeat = time.Now()
+				rf.persist()
 				return
 			}
 
@@ -97,6 +107,7 @@ func (rf *Raft) broadcastRequestVote(term int, candidateId int, peersCount int) 
 						rf.matchIndex[i] = 0
 					}
 
+					// Send heartbeats immediately to suppress other elections
 					go rf.runHeartbeatTicker()
 				}
 				voteMutex.Unlock()
