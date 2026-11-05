@@ -33,3 +33,9 @@ type NodeHandle struct {
 	KillFunc func()
 	IsDead   func() bool
 }
+
+// HTTPServer manages the web dashboard and REST API
+type HTTPServer struct {
+	mu    sync.Mutex
+	nodes []*NodeHandle
+}
