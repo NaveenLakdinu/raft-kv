@@ -74,3 +74,10 @@ type KVStore struct {
 	mu   sync.RWMutex
 	data map[string]string
 }
+
+// NewKVStore initializes an empty Key-Value state machine
+func NewKVStore() *KVStore {
+	return &KVStore{
+		data: make(map[string]string),
+	}
+}
