@@ -107,3 +107,15 @@ func (kv *KVStore) Apply(cmd Command) (string, bool) {
 		return "", false
 	}
 }
+
+// Snapshot returns a shallow copy of the state machine's dataset
+func (kv *KVStore) Snapshot() map[string]string {
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
+
+	clone := make(map[string]string, len(kv.data))
+	for k, v := range kv.data {
+		clone[k] = v
+	}
+	return clone
+}
