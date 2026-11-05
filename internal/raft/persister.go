@@ -67,3 +67,17 @@ func (p *Persister) ReadState() (int, int, []rpc.LogEntry, bool) {
 
 	data, err := os.ReadFile(p.filePath)
 	if err != nil {
+		// File does not exist yet (clean start)
+		return 0, -1, make([]rpc.LogEntry, 0), false
+	}
+
+	buf := bytes.NewBuffer(data)
+	dec := gob.NewDecoder(buf)
+	var state PersistentState
+	if err := dec.Decode(&state); err != nil {
+		fmt.Printf("Warning: failed decoding state file %s: %v\n", p.filePath, err)
+		return 0, -1, make([]rpc.LogEntry, 0), false
+	}
+
+	return state.CurrentTerm, state.VotedFor, state.Log, true
+}
