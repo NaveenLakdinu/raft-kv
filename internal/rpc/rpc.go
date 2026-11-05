@@ -37,3 +37,9 @@ type AppendEntriesReply struct {
 	Success bool // Leader ගේ log එක follower ගේ log එක එක්ක match වුණා නම් true
 }
 
+// ApplyMsg is sent by Raft to the service (KV store) over applyCh when an entry is committed
+type ApplyMsg struct {
+	CommandValid bool
+	Command      interface{}
+	CommandIndex int
+}
