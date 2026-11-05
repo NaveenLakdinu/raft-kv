@@ -14,3 +14,10 @@ const (
 	OpGet    OpType = "GET"
 	OpDelete OpType = "DELETE"
 )
+
+// Command represents a client operation to be processed by the state machine
+type Command struct {
+	Op    OpType // PUT, GET, DELETE
+	Key   string
+	Value string
+}
