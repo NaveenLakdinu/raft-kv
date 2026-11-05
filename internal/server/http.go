@@ -6,12 +6,12 @@ import (
 	"html/template"
 	"net/http"
 	"sync"
+	"time"
 
 	"raft-kv/internal/kv"
 	"raft-kv/internal/raft"
 )
 
-// NodeView represents the snapshot of a node's state for the UI
 type NodeView struct {
 	ID        int               `json:"id"`
 	Role      string            `json:"role"`
@@ -21,12 +21,10 @@ type NodeView struct {
 	Store     map[string]string `json:"store"`
 }
 
-// ClusterView represents the snapshot of the entire cluster
 type ClusterView struct {
 	Nodes []NodeView `json:"nodes"`
 }
 
-// NodeHandle holds references to a node instance
 type NodeHandle struct {
 	ID       int
 	RaftNode *raft.Raft
@@ -35,20 +33,17 @@ type NodeHandle struct {
 	IsDead   func() bool
 }
 
-// HTTPServer manages the web dashboard and REST API
 type HTTPServer struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	nodes []*NodeHandle
 }
 
-// NewHTTPServer creates an HTTP dashboard server
 func NewHTTPServer(nodes []*NodeHandle) *HTTPServer {
 	return &HTTPServer{
 		nodes: nodes,
 	}
 }
 
-// RegisterRoutes sets up HTTP endpoints
 func (s *HTTPServer) RegisterRoutes() {
 	http.HandleFunc("/", s.handleIndex)
 	http.HandleFunc("/api/cluster", s.handleClusterState)
@@ -57,11 +52,13 @@ func (s *HTTPServer) RegisterRoutes() {
 }
 
 func (s *HTTPServer) handleClusterState(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	nodesCopy := make([]*NodeHandle, len(s.nodes))
+	copy(nodesCopy, s.nodes)
+	s.mu.RUnlock()
 
 	var cluster ClusterView
-	for _, n := range s.nodes {
+	for _, n := range nodesCopy {
 		term, isLeader := n.RaftNode.GetState()
 		role := "Follower"
 		if isLeader {
@@ -97,7 +94,7 @@ func (s *HTTPServer) handleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
+	s.mu.RLock()
 	var leader *NodeHandle
 	for _, n := range s.nodes {
 		if !n.IsDead() {
@@ -108,7 +105,7 @@ func (s *HTTPServer) handleExecute(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock() // Release mutex BEFORE calling Raft Start()
 
 	if leader == nil {
 		http.Error(w, "No active leader available to process command", http.StatusServiceUnavailable)
@@ -117,9 +114,12 @@ func (s *HTTPServer) handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	index, term, ok := leader.RaftNode.Start(cmdStr)
 	if !ok {
-		http.Error(w, "Failed to propose command", http.StatusInternalServerError)
+		http.Error(w, "Failed to propose command (leader changed or busy)", http.StatusInternalServerError)
 		return
 	}
+
+	// Give a brief moment for replication round
+	time.Sleep(150 * time.Millisecond)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -145,19 +145,24 @@ func (s *HTTPServer) handleKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	s.mu.RLock()
+	var target *NodeHandle
 	for _, n := range s.nodes {
 		if n.ID == targetId {
-			n.KillFunc()
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"status": "killed",
-				"id":     targetId,
-			})
-			return
+			target = n
+			break
 		}
+	}
+	s.mu.RUnlock()
+
+	if target != nil {
+		target.KillFunc()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "killed",
+			"id":     targetId,
+		})
+		return
 	}
 
 	http.Error(w, "Node not found", http.StatusNotFound)
@@ -189,30 +194,27 @@ const htmlDashboard = `<!DOCTYPE html>
       </div>
     </header>
 
-    <!-- Controls Section -->
     <div class="card-glass rounded-xl p-6 mb-8 shadow-xl">
       <h2 class="text-lg font-semibold mb-4 text-cyan-300">Client Operations Console</h2>
       <div class="flex gap-4">
         <input id="cmdInput" type="text" placeholder="e.g. SET name=Geeth  or  SET role=Engineer" 
                class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-cyan-500 text-white" />
-        <button onclick="submitCommand()" class="bg-gradient-to-r from-teal-500 to-cyan-600 hover:from-teal-600 hover:to-cyan-700 px-6 py-2.5 rounded-lg text-sm font-semibold transition shadow-md">
+        <button id="submitBtn" onclick="submitCommand()" class="bg-gradient-to-r from-teal-500 to-cyan-600 hover:from-teal-600 hover:to-cyan-700 px-6 py-2.5 rounded-lg text-sm font-semibold transition shadow-md">
           Execute Proposal
         </button>
       </div>
-      <div id="cmdStatus" class="mt-2 text-xs text-slate-400 h-4"></div>
+      <div id="cmdStatus" class="mt-2 text-xs font-medium text-slate-400 h-4"></div>
     </div>
 
-    <!-- Cluster Nodes Grid -->
     <h2 class="text-xl font-bold mb-4 text-slate-200">Cluster Nodes Status</h2>
-    <div id="nodesGrid" class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-      <!-- Injected via JavaScript -->
-    </div>
+    <div id="nodesGrid" class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8"></div>
   </div>
 
   <script>
     async function fetchCluster() {
       try {
         const res = await fetch('/api/cluster');
+        if (!res.ok) return;
         const data = await res.json();
         renderNodes(data.nodes);
       } catch (e) {
@@ -242,7 +244,7 @@ const htmlDashboard = `<!DOCTYPE html>
           storeHtml = storeEntries.map(function(pair) {
             return '<div class="flex justify-between py-1 border-b border-slate-800 text-xs">' +
                    '<span class="text-slate-400">' + pair[0] + '</span>' +
-                   '<span class="font-mono text-cyan-300 font-medium">' + pair[1] + '</span>' +
+                   '<span class="font-mono text-cyan-300 font-bold">' + pair[1] + '</span>' +
                    '</div>';
           }).join('');
         }
@@ -282,22 +284,31 @@ const htmlDashboard = `<!DOCTYPE html>
     async function submitCommand() {
       const input = document.getElementById('cmdInput');
       const status = document.getElementById('cmdStatus');
+      const btn = document.getElementById('submitBtn');
       const val = input.value.trim();
       if (!val) return;
 
+      btn.disabled = true;
       status.innerText = "Proposing to leader...";
+      status.className = "mt-2 text-xs font-medium text-amber-400 h-4";
+
       try {
         const res = await fetch('/api/execute?cmd=' + encodeURIComponent(val), { method: 'POST' });
         if (res.ok) {
           const data = await res.json();
-          status.innerText = "Propose accepted at Index " + data.index + " by Leader Node " + data.leader;
+          status.innerText = "✓ Committed at Index " + data.index + " by Leader Node " + data.leader;
+          status.className = "mt-2 text-xs font-medium text-emerald-400 h-4";
           input.value = '';
-          fetchCluster();
+          await fetchCluster();
         } else {
           status.innerText = "Error: " + await res.text();
+          status.className = "mt-2 text-xs font-medium text-rose-400 h-4";
         }
       } catch (e) {
         status.innerText = "Network Error";
+        status.className = "mt-2 text-xs font-medium text-rose-400 h-4";
+      } finally {
+        btn.disabled = false;
       }
     }
 
@@ -307,7 +318,7 @@ const htmlDashboard = `<!DOCTYPE html>
       fetchCluster();
     }
 
-    setInterval(fetchCluster, 500);
+    setInterval(fetchCluster, 1000);
     fetchCluster();
   </script>
 </body>
