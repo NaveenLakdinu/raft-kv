@@ -68,3 +68,9 @@ func ParseCommand(raw string) (Command, error) {
 		return Command{}, fmt.Errorf("unsupported operation: %s", opStr)
 	}
 }
+
+// KVStore represents the in-memory state machine
+type KVStore struct {
+	mu   sync.RWMutex
+	data map[string]string
+}
